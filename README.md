@@ -14,8 +14,6 @@ Official implementation of **GC-OPD**, which organizes recorded task executions 
 
 ![Results and computational costs](figures/results-overview.png)
 
-![Teacher-source budget analysis](figures/source-budget.png)
-
 Figures and results are from the paper.
 
 ## Models

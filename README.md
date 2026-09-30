@@ -2,7 +2,7 @@
 
 **Graph-Conditioned On-Policy Agent Distillation from Off-the-Shelf Teachers**
 
-[Paper](https://arxiv.org/abs/2609.37522) · [Code](https://github.com/hanyi2021/GC_OPD)
+[Paper](https://arxiv.org/abs/2609.37522) · [Models](https://huggingface.co/xiaohan-yi/GC_OPD) · [Code](https://github.com/hanyi2021/GC_OPD)
 
 Official implementation of **GC-OPD**, which organizes recorded task executions into a graph and retrieves relevant successful and failed histories to improve teacher feedback during on-policy agent distillation. The repository covers ScienceWorld, ALFWorld and WebShop.
 
@@ -22,12 +22,19 @@ The eight BF16 models cover GC-OPD and GC-OPD+GA at each environment/size. GA de
 
 | Environment | Student | GC-OPD model | GC-OPD+GA model |
 |---|---|---|---|
-| ScienceWorld | Qwen3-1.7B | `gc-opd-scienceworld-qwen3-1.7b` | `gc-opd-scienceworld-qwen3-1.7b-ga` |
-| ScienceWorld | Qwen3-4B | `gc-opd-scienceworld-qwen3-4b` | `gc-opd-scienceworld-qwen3-4b-ga` |
-| ALFWorld | Qwen3-1.7B | `gc-opd-alfworld-qwen3-1.7b` | `gc-opd-alfworld-qwen3-1.7b-ga` |
-| WebShop | Qwen3.5-0.8B | `gc-opd-webshop-qwen3.5-0.8b` | `gc-opd-webshop-qwen3.5-0.8b-ga` |
+| ScienceWorld | Qwen3-1.7B | [gc-opd-scienceworld-qwen3-1.7b](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-scienceworld-qwen3-1.7b) | [gc-opd-scienceworld-qwen3-1.7b-ga](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-scienceworld-qwen3-1.7b-ga) |
+| ScienceWorld | Qwen3-4B | [gc-opd-scienceworld-qwen3-4b](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-scienceworld-qwen3-4b) | [gc-opd-scienceworld-qwen3-4b-ga](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-scienceworld-qwen3-4b-ga) |
+| ALFWorld | Qwen3-1.7B | [gc-opd-alfworld-qwen3-1.7b](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-alfworld-qwen3-1.7b) | [gc-opd-alfworld-qwen3-1.7b-ga](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-alfworld-qwen3-1.7b-ga) |
+| WebShop | Qwen3.5-0.8B | [gc-opd-webshop-qwen3.5-0.8b](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-webshop-qwen3.5-0.8b) | [gc-opd-webshop-qwen3.5-0.8b-ga](https://huggingface.co/xiaohan-yi/GC_OPD/tree/main/gc-opd-webshop-qwen3.5-0.8b-ga) |
 
-To evaluate a model, use its complete local Hugging Face directory as `--model` in [Evaluate an existing model](#evaluate-an-existing-model). Each model card includes its paper results and inference settings.
+All eight models are available in [xiaohan-yi/GC_OPD](https://huggingface.co/xiaohan-yi/GC_OPD), one subdirectory per model. Download the desired model:
+
+```bash
+MODEL="gc-opd-scienceworld-qwen3-1.7b"
+hf download xiaohan-yi/GC_OPD --include "${MODEL}/*" --local-dir ./models
+```
+
+Use `./models/${MODEL}` as `--model` in [Evaluate an existing model](#evaluate-an-existing-model).
 
 ## Installation
 

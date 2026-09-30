@@ -1,0 +1,2 @@
+- name: scienceworld
+  _target_: gcopd.scienceworld.adapter.agent.ScienceWorldLoop

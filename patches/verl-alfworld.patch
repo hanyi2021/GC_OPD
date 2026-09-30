@@ -1,0 +1,191 @@
+diff --git a/verl/experimental/agent_loop/agent_loop.py b/verl/experimental/agent_loop/agent_loop.py
+index 4a1f8a94f8a6ebe0645657d8f0bdd9634f22356c..7d28540eec864acfffb0a9386de97a252dc9cc0a 100644
+--- a/verl/experimental/agent_loop/agent_loop.py
++++ b/verl/experimental/agent_loop/agent_loop.py
+@@ -704,6 +704,8 @@ class AgentLoopWorker:
+                 data_config=DictConfigWrap(self.config.data),
+                 tools=ToolListWrap(self.tools),
+             )
++            if agent_name == "alfworld":
++                kwargs["_sw_trajectory_info"] = trajectory
+             output: AgentLoopOutput = await agent_loop.run(sampling_params, **kwargs)
+             return await self._agent_loop_postprocess(output, trajectory["validate"], **kwargs)
+ 
+@@ -1031,6 +1033,42 @@ class AgentLoopWorker:
+         sample_kwargs: Optional[dict[str, Any]] = None,
+     ) -> None:
+         """Compute teacher logprobs for single sample."""
++        if self.distillation_enabled and not validate and "sw_turns" in output.extra_fields:
++            # Score every actual decision context, not only the last reply used as the episode placeholder.
++            turns = output.extra_fields["sw_turns"]
++            if not turns:
++                size = len(prompt_ids) + len(response_ids)
++                output.extra_fields["teacher_ids"] = torch.zeros((size, 1), dtype=torch.int32)
++                output.extra_fields["teacher_logprobs"] = torch.zeros((size, 1))
++                return
++            semaphore = asyncio.Semaphore(4)
++            async def score_turn(turn):
++                async with semaphore:
++                    ids, lps = await self.teacher_server_manager.compute_teacher_logprobs_single(
++                        sequence_ids=turn.get("teacher_prompt_ids",turn["prompt_ids"]) + turn["response_ids"], routing_key="alfworld"
++                    )
++                from gcopd.training.alignment import align_teacher
++                ids,lps=align_teacher(ids,lps,turn)
++                a, b = len(turn["prompt_ids"]), len(turn["response_ids"])
++                assert ids.ndim == 2 and ids.shape[1] == 1 and lps.shape == ids.shape
++                assert torch.equal(ids[a-1:a+b-1, 0].long(), torch.tensor(turn["response_ids"]))
++                assert torch.isfinite(lps[a-1:a+b-1]).all()
++                turn["teacher_ids"] = ids.tolist()
++                turn["teacher_logprobs"] = lps.tolist()
++                return ids, lps
++            scored = await asyncio.gather(*[score_turn(t) for t in turns])
++            output.extra_fields["teacher_ids"], output.extra_fields["teacher_logprobs"] = scored[-1]
++            from pathlib import Path
++            import json
++            source = Path(output.extra_fields["sw_episode_file"])
++            audit = source.parent.parent / "teacher_scores"
++            audit.mkdir(exist_ok=True)
++            records = []
++            for turn, (ids, lps) in zip(turns, scored):
++                a, b = len(turn["prompt_ids"]), len(turn["response_ids"])
++                records.append({"response_ids": turn["response_ids"], "teacher_response_logprobs": lps[a-1:a+b-1,0].tolist(), "prompt_length": a})
++            (audit / source.name).write_text(json.dumps({"student_episode": str(source), "turns": records}))
++            return
+         if self.distillation_enabled and not validate:
+             routing_key = None
+             if sample_kwargs is not None:
+@@ -1113,6 +1151,8 @@ class AgentLoopWorker:
+         # Keep a stable set of keys so downstream batch concat stays consistent across agent loops.
+         extra_fields = {}
+         default_extra_keys = {
++            "sw_episode_file",
++            "sw_initial_cache",
+             "turn_scores",
+             "tool_rewards",
+             "min_global_steps",
+diff --git a/verl/trainer/distillation/losses.py b/verl/trainer/distillation/losses.py
+index eb1e1bbdc26ab5ee5037f50cbc7550885f32f35b..84f4831b961db5a07b8ac13863760a52373281e2 100644
+--- a/verl/trainer/distillation/losses.py
++++ b/verl/trainer/distillation/losses.py
+@@ -114,6 +114,8 @@ def compute_distillation_loss_range(
+         distillation_losses_response = distillation_losses[response_mask.bool().to_padded_tensor(False)]
+     else:
+         distillation_losses_response = distillation_losses[response_mask.bool()]
++    if distillation_losses_response.numel() == 0:
++        return {"distillation/loss_min": Metric(AggregationType.MIN, float("inf")), "distillation/loss_max": Metric(AggregationType.MAX, float("-inf"))}
+     return {
+         "distillation/loss_min": Metric(AggregationType.MIN, distillation_losses_response.min()),
+         "distillation/loss_max": Metric(AggregationType.MAX, distillation_losses_response.max()),
+@@ -265,6 +267,9 @@ def distillation_loss(
+     config.global_batch_info["global_batch_size"] = data["global_batch_size"]
+     config.global_batch_info["loss_scale_factor"] = config.loss_scale_factor
+ 
++    if "sw_token_weight" in data:
++        distillation_losses = distillation_losses * data["sw_token_weight"]
++
+     if loss_config.use_policy_gradient:
+         # Use negative distillation loss as reward, as done by https://thinkingmachines.ai/blog/on-policy-distillation/.
+         policy_loss_fn = get_policy_loss_fn(loss_config.policy_loss_mode)
+@@ -400,6 +405,6 @@ def compute_distillation_loss_reverse_kl_estimator(
+     )
+     # Since k1 can be negative, log the mean absolute loss.
+     metrics = {
+-        "distillation/abs_loss": Metric(AggregationType.MEAN, distillation_losses[response_mask_bool].abs().mean()),
++        "distillation/abs_loss": Metric(AggregationType.MEAN, (distillation_losses[response_mask_bool].abs().mean() if response_mask_bool.any() else distillation_losses.new_zeros(()))),
+     }
+     return distillation_losses, metrics
+diff --git a/verl/trainer/ppo/ray_trainer.py b/verl/trainer/ppo/ray_trainer.py
+index 908d36b2f5470119358db9bd9a20d9b575932de1..aea2ef388fbcd54ee6e69d14242a6734da27d9e4 100644
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -1049,6 +1049,13 @@ class RayPPOTrainer:
+         with open(local_latest_checkpointed_iteration, "w") as f:
+             f.write(str(self.global_steps))
+ 
++    def _data_epoch_steps(self):
++        """Count dataset updates independently of pretraining checkpoint steps."""
++        offset = int(self.config.trainer.get("data_epoch_global_step_offset", 0))
++        if offset < 0 or self.global_steps < offset:
++            raise ValueError(f"Invalid data epoch offset {offset} at global step {self.global_steps}")
++        return self.global_steps - offset
++
+     def _load_checkpoint(self):
+         if self.config.trainer.resume_mode == "disable":
+             return 0
+@@ -1102,10 +1109,10 @@ class RayPPOTrainer:
+         dataloader_local_path = os.path.join(global_step_folder, "data.pt")
+         if os.path.exists(dataloader_local_path):
+             steps_per_epoch = len(self.train_dataloader)
+-            at_epoch_boundary = steps_per_epoch > 0 and self.global_steps % steps_per_epoch == 0
++            at_epoch_boundary = steps_per_epoch > 0 and self._data_epoch_steps() % steps_per_epoch == 0
+             if at_epoch_boundary:
+                 print(
+-                    f"Skipping dataloader state restore: global_steps={self.global_steps} "
++                    f"Skipping dataloader state restore: global_steps={self.global_steps}, data_steps={self._data_epoch_steps()} "
+                     f"is at an epoch boundary (steps_per_epoch={steps_per_epoch}). "
+                     f"The saved state marks the dataloader as exhausted. "
+                     f"Next epoch will iterate from scratch."
+@@ -1326,6 +1333,8 @@ class RayPPOTrainer:
+             )
+         ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+         ppo_mini_batch_size = ppo_mini_batch_size * self.config.actor_rollout_ref.rollout.n
++        if batch.meta_info.get("sw_expanded", False):
++            ppo_mini_batch_size = len(batch)
+         ppo_epochs = self.config.actor_rollout_ref.actor.ppo_epochs
+         seed = self.config.actor_rollout_ref.actor.data_loader_seed
+         shuffle = self.config.actor_rollout_ref.actor.shuffle
+@@ -1404,7 +1413,7 @@ class RayPPOTrainer:
+         self._load_checkpoint()
+         self.checkpoint_manager.update_weights(self.global_steps)
+ 
+-        current_epoch = self.global_steps // len(self.train_dataloader)
++        current_epoch = self._data_epoch_steps() // len(self.train_dataloader)
+ 
+         SkipManager.init(self.config)
+ 
+@@ -1514,6 +1523,11 @@ class RayPPOTrainer:
+                     # repeat to align with repeated responses in rollout
+                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+                     batch = batch.union(gen_batch_output)
++                    if "sw_turns" in batch.non_tensor_batch:
++                        from gcopd.training.batch import expand
++                        batch = expand(batch, self.config.trainer.nnodes * self.config.trainer.n_gpus_per_node)
++                        metrics["sw/episode_success_rate"] = batch.meta_info["sw_episode_success_rate"]
++                        metrics["sw/episode_count"] = batch.meta_info["sw_episode_count"]
+ 
+                     if "response_mask" not in batch.batch.keys():
+                         batch.batch["response_mask"] = compute_response_mask(batch)
+@@ -1548,7 +1562,9 @@ class RayPPOTrainer:
+                     #   Note: π_old computed once per data batch, serves as stable reference during mini-batch updates
+                     rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
+                     bypass_recomputing_logprobs = rollout_corr_config and rollout_corr_config.get("bypass_mode", False)
+-                    if bypass_recomputing_logprobs:  # Use `rollout_log_probs`
++                    if batch.meta_info.get("sw_expanded", False):
++                        batch.batch["old_log_probs"] = batch.batch["rollout_log_probs"].clone()
++                    elif bypass_recomputing_logprobs:  # Use `rollout_log_probs`
+                         from verl.trainer.ppo.rollout_corr_helper import apply_bypass_mode
+ 
+                         apply_bypass_mode(
+@@ -1639,7 +1655,9 @@ class RayPPOTrainer:
+                             "norm_adv_by_std_in_grpo", True
+                         )  # GRPO adv normalization factor
+ 
+-                        batch = compute_advantage(
++                        batch = (lambda b, **kw: b) (
++                            batch,
++                        ) if batch.meta_info.get("sw_expanded", False) else compute_advantage(
+                             batch,
+                             adv_estimator=self.config.algorithm.adv_estimator,
+                             gamma=self.config.algorithm.gamma,
+diff --git a/verl/workers/config/distillation.py b/verl/workers/config/distillation.py
+index b58f8bccffd0d3efaaec0a351f0288de7d857818..9f8bf8a370d44c5ed1bd4a15dfc710ba20f3f686 100644
+--- a/verl/workers/config/distillation.py
++++ b/verl/workers/config/distillation.py
+@@ -86,6 +86,7 @@ class DistillationLossConfig(BaseConfig):
+     clip_ratio: float = 0.2
+     clip_ratio_low: float = 0.2
+     clip_ratio_high: float = 0.2
++    clip_ratio_c: float = 1e10
+ 
+     # Store global batch info for loss aggregation:
+     # dp_size: data parallel size

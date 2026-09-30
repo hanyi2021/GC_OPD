@@ -1,0 +1,13 @@
+{
+  "instruction": "Find a blue cotton shirt in size medium for less than 30 dollars.",
+  "observation": "WebShop [SEP] Instruction: [SEP] Find a blue cotton shirt in size medium for less than 30 dollars. [SEP] Search",
+  "available_actions": {
+    "has_search_bar": true,
+    "clickables": [
+      "Search"
+    ]
+  },
+  "history": [],
+  "goal": 0,
+  "rep": 0
+}

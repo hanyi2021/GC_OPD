@@ -1,0 +1,15 @@
+{
+  "instruction": "put a clean mug in coffeemachine.",
+  "observation": "You are in the middle of a room. Looking quickly around you, you see a cabinet 1, a coffeemachine 1, a countertop 1, and a sinkbasin 1.",
+  "available_actions": [
+    "go to cabinet 1",
+    "go to countertop 1",
+    "go to sinkbasin 1",
+    "go to coffeemachine 1",
+    "look",
+    "inventory"
+  ],
+  "history": [],
+  "task_id": "example-alfworld-kitchen",
+  "rep": 0
+}

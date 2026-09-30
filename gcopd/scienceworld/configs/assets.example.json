@@ -1,0 +1,7 @@
+{
+  "student_model": "/path/to/Qwen3-4B",
+  "teacher_model": "/path/to/Qwen3-32B",
+  "train_parquet": "/path/to/prepared-data/train.parquet",
+  "dev_parquet": "/path/to/prepared-data/dev.parquet",
+  "graph_catalog": "/path/to/replayed-k16-catalog"
+}

@@ -1,0 +1,2 @@
+- name: webshop
+  _target_: gcopd.webshop.adapter.agent.WebShopLoop
